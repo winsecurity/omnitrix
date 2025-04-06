@@ -86,7 +86,7 @@ pub fn runme37(user:&str,pass:&str,programtorun: &str) -> PROCESS_INFORMATION{
     std::ptr::null_mut(),
     &mut si,&mut pi)};
 
-    println!("createprocesswithlogonw result: {}",res);
+    //println!("createprocesswithlogonw result: {}",res);
 
 
     pi

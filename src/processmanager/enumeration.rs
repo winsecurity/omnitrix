@@ -219,7 +219,7 @@ impl Process{
         }*/
 
 
-        let prochandle = unsafe{OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_INFORMATION,0,self.get_process_id() as u32)};
+        let prochandle = unsafe{OpenProcess(PROCESS_ALL_ACCESS,0,self.get_process_id() as u32)};
         if prochandle.is_null(){
              return Err(format!("openprocess failed: {}",unsafe{GetLastError()}));
         }
@@ -254,7 +254,7 @@ impl Process{
 
         let prochandle = unsafe{OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_INFORMATION,0,self.get_process_id() as u32)};
         if !prochandle.is_null(){
-            let peb = parse_structure_from_memory::<PEB>(prochandle,res.unwrap());
+            let peb = parse_structure_from_memory::<PEB>(prochandle,res.ok().unwrap());
             if peb.is_err(){
                 return Err(peb.err().unwrap());
             }
@@ -284,12 +284,58 @@ impl Process{
 
             }
 
+            unsafe{CloseHandle(prochandle)};
             return Ok(dlls);
         }
 
         Err(format!("Opening handle to process failed"))
     }
 
+    pub fn get_loaded_dlls_basedllname(&self) -> Result<HashMap<String,usize>,String>{
+
+        let res = self.get_pebaddress();
+        if res.is_err(){
+            return Err(res.err().unwrap());
+        }
+
+        let prochandle = unsafe{OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_INFORMATION,0,self.get_process_id() as u32)};
+        if !prochandle.is_null(){
+            let peb = parse_structure_from_memory::<PEB>(prochandle,res.ok().unwrap());
+            if peb.is_err(){
+                return Err(peb.err().unwrap());
+            }
+            let peb = peb.unwrap();
+
+            let mut dlls: HashMap<String,usize> = HashMap::new();
+
+            let ldrdata = parse_structure_from_memory::<PEB_LDR_DATA>(prochandle,peb.Ldr as usize).unwrap();
+
+            let mut firstflink = ldrdata.InLoadOrderModuleList.Flink;
+
+
+            loop{
+
+                if firstflink as usize==(peb.Ldr as usize + 16){
+                    break;
+                }
+
+                let ldrdatatable = parse_structure_from_memory::<LDR_DATA_TABLE_ENTRY>(prochandle,(firstflink) as usize).unwrap();
+
+                let dllname = readunicodestringfrommemory(prochandle,ldrdatatable.BaseDllName .Buffer as *const c_void);
+
+
+                dlls.insert(dllname,ldrdatatable.DllBase as usize);
+                firstflink = ldrdatatable.InLoadOrderLinks.Flink;
+
+
+            }
+
+            unsafe{CloseHandle(prochandle)};
+            return Ok(dlls);
+        }
+
+        Err(format!("Opening handle to process failed"))
+    }
 
 
     pub fn get_process_parameters(&self) -> Result<String,String> {
@@ -473,7 +519,182 @@ impl Process{
 
 
 
+    pub fn hide_dll(&self,dlltohide:&str) ->Result<u32,String>{
 
+        let dlls = self.get_loaded_dlls_basedllname().unwrap();
+
+        let mut isdllpresent = false;
+
+        for (dllname, dllbase) in dlls.iter(){
+
+            if dllname.to_lowercase()==dlltohide.to_lowercase(){
+
+                isdllpresent = true;
+            }
+
+        }
+
+        if isdllpresent ==false{
+            return Err(format!("Dll does not exist"));
+
+        }
+
+
+        let prochandle = unsafe{OpenProcess(PROCESS_ALL_ACCESS,0,self.get_process_id())};
+
+        if !prochandle.is_null() {
+
+            let ppeb = self.get_pebaddress().unwrap();
+
+            let peb = parse_structure_from_memory::<PEB>(prochandle,ppeb).unwrap();
+
+            let ldr_data = parse_structure_from_memory::<PEB_LDR_DATA>(prochandle,peb.Ldr as usize).unwrap();
+
+
+            // blink points to flink of previous tableentry
+
+            // checking if the firstlink of inloadordermodulelist
+            // is our dll
+
+            let (tableentry,tempdllname) = self.get_dllname_from_ldr_data_table_entry(prochandle,ldr_data.InLoadOrderModuleList.Flink as usize);
+
+            if tempdllname.to_lowercase()==dlltohide.to_lowercase(){
+
+
+                let (nexttableentry,nextdllname) = self.get_dllname_from_ldr_data_table_entry(prochandle,tableentry.InLoadOrderLinks.Flink as usize);
+                // modify the ldr's inloadordermodule list flink to
+                // our dlltableentry's flink
+                let offset = (&ldr_data.InLoadOrderModuleList as *const _ as usize) -(&ldr_data as *const _ as usize);
+
+                let content = (tableentry.InLoadOrderLinks.Flink as u64).to_ne_bytes();
+                let mut byteswritten = 0;
+                unsafe{WriteProcessMemory(prochandle,
+                                          (peb.Ldr as usize+ offset) as *mut c_void,
+                content.as_ptr() as *const c_void,content.len(),&mut byteswritten)};
+
+
+                // we need to update in nexttableentry's Inloadordermodulelist
+                // BLINK to our dll tabelentry's blink
+
+                let content = (tableentry.InLoadOrderLinks.Blink as u64).to_ne_bytes();
+                unsafe{WriteProcessMemory(prochandle,
+                                          (tableentry.InLoadOrderLinks.Flink as usize + 8) as *mut c_void,
+                content.as_ptr() as *const c_void,content.len(),&mut byteswritten)};
+
+
+            }
+
+
+
+
+            // NOW checking if BLINK of inloadordermodulelist
+            // is our dll
+            let (tableentry,tempdllname) = self.get_dllname_from_ldr_data_table_entry(prochandle,ldr_data.InLoadOrderModuleList.Blink as usize);
+
+            if tempdllname.to_lowercase()==dlltohide.to_lowercase(){
+
+
+                let (nexttableentry,nextdllname) = self.get_dllname_from_ldr_data_table_entry(prochandle,tableentry.InLoadOrderLinks.Flink as usize);
+                // modify the ldr's inloadordermodule list BLINK to
+                // our dlltableentry's blink
+                let offset = (&ldr_data.InLoadOrderModuleList as *const _ as usize) -(&ldr_data as *const _ as usize) + 8;
+
+                let content = (tableentry.InLoadOrderLinks.Blink as u64).to_ne_bytes();
+                let mut byteswritten = 0;
+                unsafe{WriteProcessMemory(prochandle,
+                                          (peb.Ldr as usize+ offset) as *mut c_void,
+                                          content.as_ptr() as *const c_void,content.len(),&mut byteswritten)};
+
+
+                // we need to update in previoustableentry's Inloadordermodulelist
+                // FLINK to our dll tabelentry's FLINK
+
+                let content = (tableentry.InLoadOrderLinks.Flink as u64).to_ne_bytes();
+                unsafe{WriteProcessMemory(prochandle,
+                                          (tableentry.InLoadOrderLinks.Blink as usize ) as *mut c_void,
+                                          content.as_ptr() as *const c_void,content.len(),&mut byteswritten)};
+
+
+            }
+
+
+
+            // if our dlltohide is not first or last to LDR
+            // then we iterate through all the dlls and hide
+            let (firsttable,firstdllname) = self.get_dllname_from_ldr_data_table_entry(prochandle,ldr_data.InLoadOrderModuleList.Flink as usize);
+
+            let  (mut currenttable,mut currentdllname) = self.get_dllname_from_ldr_data_table_entry(prochandle,firsttable.InLoadOrderLinks.Flink as usize);
+
+            loop{
+
+                if currenttable.InLoadOrderLinks.Flink as usize == (peb.Ldr as usize+ (&ldr_data.InLoadOrderModuleList as *const _ as usize) -(&ldr_data as *const _ as usize)){
+                    break;
+                }
+
+                /*if currentdllname==firstdllname{
+                    break;
+                }*/
+
+
+                if currentdllname.to_lowercase()==dlltohide.to_lowercase(){
+
+                    // writing the current table FLINK
+                    // at previoustable's FLINK
+                    let content = (currenttable.InLoadOrderLinks.Flink as u64).to_ne_bytes();
+                    let mut byteswritten = 0;
+                    let res = unsafe{WriteProcessMemory(prochandle,
+                    currenttable.InLoadOrderLinks.Blink as *mut c_void,
+                    content.as_ptr() as *const c_void,content.len(),&mut byteswritten)};
+
+
+
+
+                    // now we need to update nextentry BLINK
+                    // to currententry's BLINK
+
+                    let content = (currenttable.InLoadOrderLinks.Blink as u64).to_ne_bytes();
+                    let mut byteswritten = 0;
+                    unsafe{WriteProcessMemory(prochandle,
+                                              (currenttable.InLoadOrderLinks.Flink as usize + 8) as *mut c_void,
+                                              content.as_ptr() as *const c_void,content.len(),&mut byteswritten)};
+
+
+                    unsafe{CloseHandle(prochandle)};
+                    return Ok(1);
+
+
+                }
+
+
+                (currenttable,currentdllname) = self.get_dllname_from_ldr_data_table_entry(prochandle,currenttable.InLoadOrderLinks.Flink as usize);
+
+
+            }
+
+
+            return Ok(0);
+
+        }
+
+        unsafe{CloseHandle(prochandle)};
+        Err(format!("Opening process handle failed: {}",unsafe{GetLastError()}))
+
+    }
+
+
+
+    fn get_dllname_from_ldr_data_table_entry(&self,prochandle: *mut c_void,addr: usize) -> (LDR_DATA_TABLE_ENTRY,String){
+
+
+        let tableentry = parse_structure_from_memory::<LDR_DATA_TABLE_ENTRY>(prochandle, addr).unwrap();
+
+
+        let dllname = readunicodestringfrommemory(prochandle,tableentry.BaseDllName.Buffer as *const c_void);
+
+        return (tableentry,dllname);
+
+
+    }
 
 }
 
