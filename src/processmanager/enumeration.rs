@@ -469,6 +469,83 @@ impl Process{
     }
 
 
+    pub fn set_environment_variable(&self,varname: &str, varvalue: &str) ->Result<u32,String>{
+        let res = self.get_pebaddress();
+        if res.is_err() {
+            return Err(res.err().unwrap());
+        }
+
+        let prochandle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, self.get_process_id() as u32) };
+        if !prochandle.is_null() {
+            let peb = parse_structure_from_memory::<PEB>(prochandle, res.unwrap());
+            if peb.is_err() {
+                return Err(peb.err().unwrap());
+            }
+            let peb = peb.unwrap();
+
+            let rtlprocessparams = parse_structure_from_memory::<RTL_USER_PROCESS_PARAMETERS>(prochandle, peb.ProcessParameters as usize).unwrap();
+
+            let mut envvariables:Vec<String> = Vec::new();
+
+            let mut t = 0;
+
+            loop{
+
+
+                if t>=rtlprocessparams.EnvironmentSize {
+                    break;
+                }
+
+                let environ = readunicodestringfrommemory(prochandle,(rtlprocessparams.Environment as usize + t) as *const c_void);
+                //println!("ENVIRON: {}",environ);
+                if environ.contains("=") {
+                    let contents = environ.split("=").collect::<Vec<&str>>();
+                    //println!("{:?}", contents);
+                    if contents.get(0).unwrap().to_string().to_lowercase() == varname.to_lowercase() {
+                        if contents.get(1).unwrap().len() < varvalue.len() {
+                            return Err(format!("new env value cannot be greater in length than original value"));
+                        } else {
+                            let target = contents[0].to_string() + "=" + varvalue;
+                            let mut buffer = target.encode_utf16().collect::<Vec<u16>>();
+
+                            let mut remaining = environ.encode_utf16().collect::<Vec<u16>>().len()-buffer.len();
+
+                            'inner: loop{
+                                if remaining == 0{
+                                    break 'inner;
+                                }
+                                buffer.push(0);
+                                remaining -= 1;
+
+                            }
+
+                            let res = unsafe {
+                                WriteProcessMemory(prochandle,
+                                                   (rtlprocessparams.Environment as usize + t) as *mut c_void,
+                                                   buffer.as_ptr() as *const c_void, buffer.len() * 2, std::ptr::null_mut())
+                            };
+
+                            println!("writeprocessmemory result: {}", res);
+                        }
+                    }
+
+                }
+                t += environ.len()*2+2; // last 2 is for two null bytes
+                envvariables.push(environ);
+
+
+
+            //return Ok(1);
+        }
+
+        return Err("something went wrong".to_string());
+    }
+
+
+        Err(format!("cannot open process handle: {}",unsafe{GetLastError()}))
+
+    }
+
     pub fn get_threadids(&self) -> Result<Vec<THREADENTRY32>,String>{
 
         let snaphandle= unsafe{CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0)};

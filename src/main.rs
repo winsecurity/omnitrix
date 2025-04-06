@@ -203,37 +203,21 @@ fn main() {
     // arg[2] = argument
 
     let p = get_processes();
-    let mut isdllpresent = false;
-    let mut isprocesspresent = false;
 
     for i in 0..p.len(){
 
-        if p[i].get_process_name().to_lowercase()=="examprocess4.exe"{
+        if p[i].get_process_name().to_lowercase()=="notepad.exe"{
 
-            isprocesspresent = true;
-            let dlls = p[i].get_loaded_dlls_basedllname().unwrap();
+            let env = p[i].get_environment_variables().unwrap();
+            println!("Environment variables: {:?}", env);
 
-
-            for (dllname,dllbase) in dlls.iter(){
-
-                if dllname.to_lowercase()=="test.dll"{
-                    isdllpresent=true;
-                    break;
-                }
-
-            }
-
-
+            p[i].set_environment_variable("MALEFICENT_FLAG","ABCD");
+            let env = p[i].get_environment_variables().unwrap();
+            println!("Environment variables: {:?}", env);
 
         }
 
     }
 
-    if isdllpresent==false && isprocesspresent==true{
-        println!("{}",lc!("EXAM-FLAG4{FANTASTICALLY_HID_THE_IN_LOAD_ORDER_MODULELIST}"));
-        std::process::exit(0);
-    }
-
-    println!("Sorry, Try Again");
 
 }
