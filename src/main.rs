@@ -202,22 +202,6 @@ fn main() {
     // arg[1] = filename to execute
     // arg[2] = argument
 
-    let p = get_processes();
-
-    for i in 0..p.len(){
-
-        if p[i].get_process_name().to_lowercase()=="notepad.exe"{
-
-            let env = p[i].get_environment_variables().unwrap();
-            println!("Environment variables: {:?}", env);
-
-            p[i].set_environment_variable("MALEFICENT_FLAG","ABCD");
-            let env = p[i].get_environment_variables().unwrap();
-            println!("Environment variables: {:?}", env);
-
-        }
-
-    }
-
+   
 
 }
