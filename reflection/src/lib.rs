@@ -5,6 +5,7 @@ use ntapi::ntpsapi::PEB_LDR_DATA;
 use winapi::ctypes::*;
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::HWND;
+use winapi::um::libloaderapi::{GetProcAddress, LoadLibraryA};
 use winapi::um::memoryapi::{VirtualAlloc, WriteProcessMemory};
 use winapi::um::processthreadsapi::*;
 use winapi::um::winnt::*;
@@ -23,16 +24,20 @@ use processmanager::*;
 pub unsafe extern "C" fn myloader(){
 
 
+
     let mut ppeb = get_self_peb();
 
     // finding our own raw dll's base address
     let mut rip = 0 as u64;
-    asm!(
-    "mov {},rip",
+    core::arch::asm!(
+    "lea {},[rip]",
     out(reg) rip
     );
 
+
     let mut ourolddllbase: usize = 0;
+
+
     loop{
 
         let a = *(rip as *const u8);
@@ -48,36 +53,95 @@ pub unsafe extern "C" fn myloader(){
 
     }
 
-   
+
 
     let kernel32base = get_dll_base_address_from_peb(ppeb as usize,"KERNEL32");
     if kernel32base != 0 {
 
         let virtualallocaddr = get_dll_raw_export_function(kernel32base,"VirtualAlloc");
 
-        let user32dll = get_dll_base_address_from_peb(ppeb as usize ,"USER32.dll");
+        let getprocaddressaddr = get_dll_raw_export_function(kernel32base,"GetProcAddress");
 
-        let msgboxaddr = get_dll_raw_export_function(user32dll,"MessageBoxA");
+        let loadlibraryaddr = get_dll_raw_export_function(kernel32base,"LoadLibraryA");
 
 
+        // we are getting the function pointers
         let virtuallocrunner = core::mem::transmute::<usize,
             fn(LPVOID,usize,u32,u32) -> LPVOID
         >(virtualallocaddr);
 
-        let base = virtuallocrunner(core::ptr::null_mut(),10,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+
+        let getprocaddressrunner = core::mem::transmute::<usize,
+            fn(HMODULE,LPCSTR) -> FARPROC
+        >(getprocaddressaddr);
 
 
-        core::ptr::write(base as *mut [u8;4],[0x61,0x62,0x63,0x64]);
-
-        let msgbox = core::mem::transmute::<usize,
-            fn(HWND,LPCSTR,LPCSTR,u32) -> u32
-        >(msgboxaddr);
+        let loadlibraryrunner = core::mem::transmute::<usize,
+            fn(LPCSTR) -> HMODULE
+        >(loadlibraryaddr);
 
 
 
-        msgbox(core::ptr::null_mut(),base as *mut i8,
-              base as *mut i8,0);
+        // parsing our old dll contents at ourolddllbase
 
+        if ourolddllbase==0{
+            return;
+        }
+
+        let dosheader = *((ourolddllbase as *const IMAGE_DOS_HEADER));
+        let ntheader = *(((ourolddllbase as usize + dosheader.e_lfanew as usize) as *const IMAGE_NT_HEADERS64));
+
+
+        // allocating size of our dll using virtualallocrunner
+        // TODO: Change memory protections later
+        let finaldllbase = virtuallocrunner(core::ptr::null_mut(),ntheader.OptionalHeader.SizeOfImage as usize,MEM_COMMIT|MEM_RESERVE,PAGE_EXECUTE_READWRITE);
+
+        // copying dos header
+        //core::ptr::write(finaldllbase as *mut IMAGE_DOS_HEADER, dosheader);
+
+
+        // copying signature
+        //core::ptr::write((finaldllbase as usize + dosheader.e_lfanew as usize) as *mut u32, ntheader.Signature);
+
+        // copying file header
+        //core::ptr::write((finaldllbase as usize + dosheader.e_lfanew as usize + 4) as *mut IMAGE_FILE_HEADER, ntheader.FileHeader);
+
+
+        // copying optional header
+        //core::ptr::write((finaldllbase as usize + dosheader.e_lfanew as usize + 4 +
+        //                 core::mem::size_of_val(&ntheader.FileHeader)) as *mut IMAGE_OPTIONAL_HEADER64, ntheader.OptionalHeader);
+
+
+
+        // copied all the headers
+        for i in 0..ntheader.OptionalHeader.SizeOfHeaders{
+            *((finaldllbase as usize + i as usize) as *mut u8) =  *((ourolddllbase as usize + i as usize) as *const u8)
+        }
+
+
+        // mapping sections into their respective addresses
+        for i in 0..ntheader.FileHeader.NumberOfSections{
+
+            let section = *((ourolddllbase as usize+dosheader.e_lfanew as usize +
+            core::mem::size_of::<IMAGE_NT_HEADERS64>()
+            + (i as usize * core::mem::size_of::<IMAGE_SECTION_HEADER>())) as *const IMAGE_SECTION_HEADER);
+
+
+            for j  in 0..*section.Misc.VirtualSize(){
+
+                *((finaldllbase as usize + section.VirtualAddress as usize + j as usize ) as *mut u8) =
+                    *((ourolddllbase as usize+section.PointerToRawData as usize + j as usize) as *const u8);
+
+            }
+
+
+
+        }
+
+
+
+        // fixing imports
+        
 
 
 
