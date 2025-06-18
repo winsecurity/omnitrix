@@ -25,6 +25,30 @@ pub unsafe extern "C" fn myloader(){
 
     let mut ppeb = get_self_peb();
 
+    // finding our own raw dll's base address
+    let mut rip = 0 as u64;
+    asm!(
+    "mov {},rip",
+    out(reg) rip
+    );
+
+    let mut ourolddllbase: usize = 0;
+    loop{
+
+        let a = *(rip as *const u8);
+        let b =  *((rip as usize + 1) as *const u8);
+
+        if a==0x4d && b==0x5a{
+            // we have found our dll contents by backtracking
+            ourolddllbase = rip as usize;
+            break;
+        }
+
+        rip = rip-1;
+
+    }
+
+   
 
     let kernel32base = get_dll_base_address_from_peb(ppeb as usize,"KERNEL32");
     if kernel32base != 0 {
