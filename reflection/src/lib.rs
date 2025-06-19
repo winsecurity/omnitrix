@@ -141,7 +141,122 @@ pub unsafe extern "C" fn myloader(){
 
 
         // fixing imports
-        
+        let firstimportrawoffset =  raw_rva2offset(ourolddllbase , ntheader.OptionalHeader.DataDirectory[1].VirtualAddress as usize);
+        let mut firstimportoffset = (ourolddllbase as usize + firstimportrawoffset) ;
+
+
+        loop{
+
+            let import = *(firstimportoffset as *const IMAGE_IMPORT_DESCRIPTOR);
+
+            if import.Name == 0{
+                break;
+            }
+
+            let dllnamerawoffset =  raw_rva2offset(ourolddllbase, import.Name as usize);
+            let dllnameaddress = (ourolddllbase + dllnamerawoffset);
+
+            // we need to load this library as our dll needs this
+            let dllhandle = loadlibraryrunner(dllnameaddress as *mut i8);
+
+
+            let mut ogfirstthunk = ourolddllbase+ raw_rva2offset(ourolddllbase,(*import.u.OriginalFirstThunk()) as usize);
+
+            let mut tempthunk = ogfirstthunk;
+            let mut counter = 0;
+
+            'inner: loop{
+
+                let funcrva = *(tempthunk as *mut u64);
+
+                if funcrva==0{
+                    break 'inner;
+                }
+
+                let funcrawrva =  ourolddllbase + raw_rva2offset(ourolddllbase,(funcrva) as usize);
+
+                let finalfuncaddress = getprocaddressrunner(dllhandle,(funcrawrva+2) as LPCSTR);
+
+                // we need to write at firstthunk
+                if finalfuncaddress as usize!=0{
+
+                   *( (finaldllbase as usize + import.FirstThunk as usize + counter*8) as *mut u64) = finalfuncaddress as u64;
+                }
+
+
+
+                tempthunk = ogfirstthunk +  (counter *8);
+                counter += 1;
+
+
+            }
+
+
+            firstimportoffset += core::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>();
+
+        }
+
+
+
+        // fixing base relocations from finaldllbaseaddress
+        let mut baserelocoffset = finaldllbase as usize +  ntheader.OptionalHeader.DataDirectory[5].VirtualAddress as usize;
+
+        loop{
+
+            let baserelocation = *(baserelocoffset as *const IMAGE_BASE_RELOCATION);
+
+            if baserelocation.VirtualAddress==0{
+                break;
+            }
+
+
+            let totalentries = (baserelocation.SizeOfBlock-8)/2;
+
+            let delta = finaldllbase as usize - ntheader.OptionalHeader.ImageBase as usize;
+
+            for i in 0..totalentries{
+
+                // read each entry offset
+                let entryoffset = * ((baserelocoffset+8+(i as usize)*2) as *const u16);
+                if entryoffset&0xF000 == 0xA000{
+
+                    let mut relocrva = finaldllbase as usize + (entryoffset&0x0FFF) as usize+baserelocation.VirtualAddress as usize;
+
+                    *(relocrva as *mut usize) = (*(relocrva as *const usize)) + delta ;
+
+                }
+
+
+
+
+            }
+
+
+            baserelocoffset += baserelocation.SizeOfBlock as usize;
+
+
+
+
+        }
+
+
+
+
+
+
+
+        // running DllMain
+        let dllmainaddr = get_dll_raw_export_function(finaldllbase as usize,"DllMain");
+
+        let dllmainrunner = core::mem::transmute::<usize,
+        fn(HINSTANCE,u32,LPVOID) -> u32>(dllmainaddr);
+
+
+        dllmainrunner(core::ptr::null_mut(),DLL_PROCESS_ATTACH,core::ptr::null_mut());
+
+
+
+
 
 
 
@@ -149,6 +264,71 @@ pub unsafe extern "C" fn myloader(){
 
 
 
+}
+
+
+
+#[no_mangle]
+pub unsafe extern "C" fn DllMain(hinstance: HINSTANCE, reason:u32, reserved:LPVOID) -> u32{
+
+    match reason {
+
+        DLL_PROCESS_ATTACH=>{
+
+            unsafe{MessageBoxA(std::ptr::null_mut(),
+            "Hello process attached\0".as_ptr() as *const i8,
+                               "Hello\0".as_ptr() as *const i8,0 )};
+
+        },
+        DLL_PROCESS_DETACH=>{
+
+        },
+        DLL_THREAD_ATTACH=>{
+            unsafe{MessageBoxA(std::ptr::null_mut(),
+                               "Hello thread attached\0".as_ptr() as *const i8,
+                               "Hello\0".as_ptr() as *const i8,0 )};
+
+        },
+        DLL_THREAD_DETACH=>{
+
+        },
+        _ => {}
+
+    }
+
+    1
+
+}
+
+pub unsafe fn raw_rva2offset(pebase: usize, rva: usize) -> usize{
+
+    let dosheader = *((pebase as *const IMAGE_DOS_HEADER) );
+    let ntheader = *(((pebase + dosheader.e_lfanew as usize) as *const IMAGE_NT_HEADERS64) );
+
+    for i in 0..ntheader.FileHeader.NumberOfSections{
+
+        let section = *((pebase as usize+dosheader.e_lfanew as usize +
+            core::mem::size_of::<IMAGE_NT_HEADERS64>()
+            + (i as usize * core::mem::size_of::<IMAGE_SECTION_HEADER>())) as *const IMAGE_SECTION_HEADER);
+
+
+        if (rva>=section.VirtualAddress as usize) &&
+            ( rva<= (section.VirtualAddress as usize+(*section.Misc.VirtualSize() as usize))){
+
+            // rva belongs to this section
+            // we need to subtract the rva from virtual address
+            // and add offset to the raw address
+           let virtualoffset =  rva-section.VirtualAddress as usize;
+
+           let finalrawoffset =  section.PointerToRawData as usize + virtualoffset;
+
+            return finalrawoffset;
+        }
+
+    }
+
+
+    0
 }
 
 
@@ -320,3 +500,7 @@ pub fn get_self_peb() -> u64{
     a
 
 }
+
+
+
+
